@@ -78,7 +78,7 @@ fn main() {
     let pass_secret = matches.value_of("secret").expect("failed getting secret");
 
     match get_last(pass_secret.to_string()) {
-        Ok(r) => println!("{:?}", r),
+        Ok(post) => println!("title: {title}, url: {url}", title=post.title, url=post.link),
         Err(_) => panic!("fail"),
     }
 }
