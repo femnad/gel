@@ -25,55 +25,45 @@ struct Post {
     title: String,
 }
 
-fn get_url(text: String) -> Result<Post, Error> {
+struct Options {
+    secret: String,
+    count: u64,
+}
+
+fn get_url(text: String) -> Vec<Post> {
     let doc = Document::parse(&text).expect("xml parsing fail");
-    for node in doc.descendants() {
-        if node.tag_name().name() == "post" {
+    doc.descendants()
+        .filter(|node| { node.tag_name().name() == "post" })
+        .map(|node| {
             let link = node.attribute("href").expect("attribute fail").to_string();
             let title = node.attribute("description").expect("attribute fail").to_string();
-            let post = Post{link, title};
-            return Ok(post);
-        }
-    }
-    Err(Error::new())
+            Post{link, title} })
+        .collect::<Vec<Post>>()
 }
 
-#[derive(Default, Debug)]
-struct Error {
-    message: String
-}
-
-impl Error {
-    pub fn new() -> Error {
-        Error::default()
-    }
-}
-
-fn get_last(pass_secret: String) -> Result<Post, Error> {
-    let token = get_token(pass_secret);
+fn get_posts(options: Options) -> Vec<Post> {
+    let token = get_token(options.secret);
     let tokens: Vec<&str> = token.split(": ").collect();
     let auth = tokens[tokens.len() - 1].to_string();
-    let url = format!("https://api.pinboard.in/v1/posts/recent?auth_token={}&count=1", auth);
+    let url = format!("https://api.pinboard.in/v1/posts/recent?auth_token={auth}&count={count}",
+                      auth=auth, count=options.count);
     let mut response = reqwest::get(url.as_str()).expect("failage");
-    match response.status() {
-        StatusCode::OK => {
-            Ok(get_url(response.text().expect("response")).expect("fail getting post"))
-        },
-        _ => {
-            Err(Error::new())
-        }
-    }
-}
-
-fn get_last_post(pass_secret: String) -> Post {
-    match get_last(pass_secret.to_string()) {
-        Ok(post) => post,
-        Err(_) => panic!("fail"),
-    }
+    assert!(response.status() == StatusCode::OK);
+    get_url(response.text().expect("response"))
 }
 
 fn get_text(post: Post) -> String {
     reqwest::get(post.link.as_str()).expect("crawl fail") .text() .expect("text fail")
+}
+
+fn scrape_post(post: Post) {
+    let text = get_text(post);
+    let document = scraper::Html::parse_document(text.as_str());
+    let selector = scraper::Selector::parse("p").expect("selector parse fail");
+    for paragraph in document.select(&selector) {
+        let paragraph_text = paragraph.text().collect::<Vec<_>>().join(" ");
+        println!("{}", paragraph_text);
+    }
 }
 
 fn main() {
@@ -84,15 +74,18 @@ fn main() {
              .help("a pass secret containing API secret")
              .takes_value(true)
              .required(true))
+        .arg(Arg::with_name("count")
+            .short("c")
+            .long("count")
+            .help("number of recent posts")
+            .default_value("1"))
         .get_matches();
     let pass_secret = matches.value_of("secret").expect("failed getting secret");
+    let count: u64 = matches.value_of("count").expect("failed getting count").parse()
+        .expect("failed parsing int");
 
-    let last_post = get_last_post(pass_secret.to_string());
-    let text = get_text(last_post);
-    let document = scraper::Html::parse_document(text.as_str());
-    let selector = scraper::Selector::parse("p").expect("selector parse fail");
-    for paragraph in document.select(&selector) {
-        let paragraph_text = paragraph.text().collect::<Vec<_>>().join(" ");
-        println!("{}", paragraph_text);
+    let posts = get_posts(Options{secret: pass_secret.to_string(), count});
+    for post in posts {
+        scrape_post(post)
     }
 }
