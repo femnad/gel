@@ -1,6 +1,8 @@
 extern crate clap;
 extern crate reqwest;
 extern crate roxmltree;
+extern crate select;
+extern crate scraper;
 
 use std::process::Command;
 use clap::{App, Arg};
@@ -29,10 +31,7 @@ fn get_url(text: String) -> Result<Post, Error> {
         if node.tag_name().name() == "post" {
             let link = node.attribute("href").expect("attribute fail").to_string();
             let title = node.attribute("description").expect("attribute fail").to_string();
-            let post = Post{
-                link: link,
-                title: title,
-            };
+            let post = Post{link, title};
             return Ok(post);
         }
     }
@@ -66,6 +65,17 @@ fn get_last(pass_secret: String) -> Result<Post, Error> {
     }
 }
 
+fn get_last_post(pass_secret: String) -> Post {
+    match get_last(pass_secret.to_string()) {
+        Ok(post) => post,
+        Err(_) => panic!("fail"),
+    }
+}
+
+fn get_text(post: Post) -> String {
+    reqwest::get(post.link.as_str()).expect("crawl fail") .text() .expect("text fail")
+}
+
 fn main() {
     let matches = App::new("gel")
         .arg(Arg::with_name("secret")
@@ -77,8 +87,12 @@ fn main() {
         .get_matches();
     let pass_secret = matches.value_of("secret").expect("failed getting secret");
 
-    match get_last(pass_secret.to_string()) {
-        Ok(post) => println!("title: {title}, url: {url}", title=post.title, url=post.link),
-        Err(_) => panic!("fail"),
+    let last_post = get_last_post(pass_secret.to_string());
+    let text = get_text(last_post);
+    let document = scraper::Html::parse_document(text.as_str());
+    let selector = scraper::Selector::parse("p").expect("selector parse fail");
+    for paragraph in document.select(&selector) {
+        let paragraph_text = paragraph.text().collect::<Vec<_>>().join(" ");
+        println!("{}", paragraph_text);
     }
 }
