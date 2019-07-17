@@ -3,11 +3,17 @@ extern crate reqwest;
 extern crate roxmltree;
 extern crate select;
 extern crate scraper;
+#[macro_use]
+extern crate tantivy;
 
 use std::process::Command;
 use clap::{App, Arg};
 use reqwest::StatusCode;
 use roxmltree::Document;
+use tantivy::schema::Schema;
+use tantivy::{Index, Score, DocAddress};
+use tantivy::query::QueryParser;
+use tantivy::collector::TopDocs;
 
 fn get_token(secret_name: String) -> String {
     let output = Command::new("pass")
@@ -37,7 +43,8 @@ fn get_url(text: String) -> Vec<Post> {
         .map(|node| {
             let link = node.attribute("href").expect("attribute fail").to_string();
             let title = node.attribute("description").expect("attribute fail").to_string();
-            Post{link, title} })
+            Post{link, title}
+        })
         .collect::<Vec<Post>>()
 }
 
@@ -56,13 +63,49 @@ fn get_text(post: Post) -> String {
     reqwest::get(post.link.as_str()).expect("crawl fail") .text() .expect("text fail")
 }
 
-fn scrape_post(post: Post) {
-    let text = get_text(post);
-    let document = scraper::Html::parse_document(text.as_str());
-    let selector = scraper::Selector::parse("p").expect("selector parse fail");
-    for paragraph in document.select(&selector) {
-        let paragraph_text = paragraph.text().collect::<Vec<_>>().join(" ");
-        println!("{}", paragraph_text);
+fn scrape_posts(posts: Vec<Post>) {
+    let mut schema_builder = Schema::builder();
+    let title = schema_builder.add_text_field("title", tantivy::schema::TEXT | tantivy::schema::STORED);
+    let body = schema_builder.add_text_field("body", tantivy::schema::TEXT);
+    let schema = schema_builder.build();
+
+    let index = Index::create_in_dir("/tmp/gel", schema.clone()).expect("index create fail");
+
+    let mut index_writer = index.writer(100_000_000).expect("writer create fail");
+
+    for post in posts {
+        let post_title = post.title.clone();
+        println!("Parsing {}", post.title);
+        let text = get_text(post);
+        let document = scraper::Html::parse_document(text.as_str());
+        let selector = scraper::Selector::parse("p").expect("selector parse fail");
+        let full_text = document.select(&selector).into_iter()
+            .map(|paragraph| {
+                paragraph.text().collect::<Vec<&str>>().join(" ")
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        index_writer.add_document(doc!(
+        title => post_title,
+        body => full_text,
+    ));
+    }
+    index_writer.commit().expect("commit fail");
+
+    let reader = index.reader().expect("reader fail");
+    let searcher = reader.searcher();
+
+    let query_parser = QueryParser::for_index(&index, vec![title, body]);
+
+    let query = query_parser.parse_query("rust").expect("query parse fail");
+
+    let top_docs: Vec<(Score, DocAddress)> = searcher.search(&query, &TopDocs::with_limit(10))
+        .expect("search fail");
+
+    for (_score, doc_address) in top_docs {
+        let retrieved_doc = searcher.doc(doc_address).expect("retrieve fail");
+        println!("{}", schema.to_json(&retrieved_doc));
     }
 }
 
@@ -85,7 +128,5 @@ fn main() {
         .expect("failed parsing int");
 
     let posts = get_posts(Options{secret: pass_secret.to_string(), count});
-    for post in posts {
-        scrape_post(post)
-    }
+    scrape_posts(posts)
 }
