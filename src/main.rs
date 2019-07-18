@@ -6,6 +6,7 @@ extern crate scraper;
 #[macro_use]
 extern crate tantivy;
 
+use std::path::Path;
 use std::process::Command;
 use clap::{App, Arg};
 use reqwest::StatusCode;
@@ -14,6 +15,8 @@ use tantivy::schema::Schema;
 use tantivy::{Index, Score, DocAddress};
 use tantivy::query::QueryParser;
 use tantivy::collector::TopDocs;
+
+const DEFAULT_INDEX_PATH: &str = "/tmp/gel";
 
 fn get_token(secret_name: String) -> String {
     let output = Command::new("pass")
@@ -34,6 +37,7 @@ struct Post {
 struct Options {
     secret: String,
     count: u64,
+    index_path: String,
 }
 
 fn get_url(text: String) -> Vec<Post> {
@@ -63,13 +67,23 @@ fn get_text(post: Post) -> String {
     reqwest::get(post.link.as_str()).expect("crawl fail") .text() .expect("text fail")
 }
 
-fn scrape_posts(posts: Vec<Post>) {
+fn get_index(schema_path: &Path, schema: Schema) -> Index {
+    let maybe_index = Index::open_in_dir(schema_path);
+    if maybe_index.is_ok() {
+        maybe_index.unwrap()
+    } else {
+        Index::create_in_dir(schema_path, schema).unwrap()
+    }
+}
+
+fn scrape_posts(posts: Vec<Post>, schema_dir: String) {
     let mut schema_builder = Schema::builder();
     let title = schema_builder.add_text_field("title", tantivy::schema::TEXT | tantivy::schema::STORED);
     let body = schema_builder.add_text_field("body", tantivy::schema::TEXT);
     let schema = schema_builder.build();
 
-    let index = Index::create_in_dir("/tmp/gel", schema.clone()).expect("index create fail");
+    let schema_path = Path::new(&schema_dir);
+    let index = get_index(schema_path, schema.clone());
 
     let mut index_writer = index.writer(100_000_000).expect("writer create fail");
 
@@ -122,11 +136,19 @@ fn main() {
             .long("count")
             .help("number of recent posts")
             .default_value("1"))
+        .arg(Arg::with_name("index")
+             .short("i")
+             .long("index-path")
+             .takes_value(true)
+             .default_value(DEFAULT_INDEX_PATH))
         .get_matches();
     let pass_secret = matches.value_of("secret").expect("failed getting secret");
     let count: u64 = matches.value_of("count").expect("failed getting count").parse()
         .expect("failed parsing int");
+    let index_path = matches.value_of("index").unwrap();
 
-    let posts = get_posts(Options{secret: pass_secret.to_string(), count});
-    scrape_posts(posts)
+    let options = Options{secret: pass_secret.to_string(), count: count, index_path: index_path.to_string()};
+    let index_path = options.index_path.clone();
+    let posts = get_posts(options);
+    scrape_posts(posts, index_path)
 }
