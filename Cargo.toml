@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 clap = "2.33.0"
+dirs = "2.0.1"
 reqwest = "0.9.18"
 roxmltree = "0.6.1"
 scraper = "0.10.1"

@@ -17,7 +17,7 @@ use tantivy::{Index, Score, DocAddress};
 use tantivy::query::QueryParser;
 use tantivy::collector::TopDocs;
 
-const DEFAULT_INDEX_PATH: &str = "/tmp/gel";
+const DEFAULT_INDEX_PATH_SUFFIX: &str = "gel";
 
 fn get_token(secret_name: String) -> String {
     let output = Command::new("pass")
@@ -109,9 +109,9 @@ fn scrape_posts(posts: Vec<Post>, schema_dir: String) {
             .join("\n");
 
         index_writer.add_document(doc!(
-        title => post_title,
-        body => full_text,
-    ));
+            title => post_title,
+            body => full_text,
+        ));
     }
     index_writer.commit().expect("commit fail");
 
@@ -136,7 +136,14 @@ fn search(term: &str, results: usize, schema_path: &str) {
     }
 }
 
+fn get_default_index_path() -> String {
+    let config_dir = dirs::config_dir().unwrap();
+    format!("{config_dir}/{suffix}", config_dir=config_dir.to_str().unwrap(),
+            suffix=DEFAULT_INDEX_PATH_SUFFIX)
+}
+
 fn main() {
+    let default_index = get_default_index_path();
     let matches = App::new("gel")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .subcommand(SubCommand::with_name("index")
@@ -151,7 +158,7 @@ fn main() {
                 .short("i")
                 .long("index-path")
                 .takes_value(true)
-                .default_value(DEFAULT_INDEX_PATH))
+                .default_value(default_index.as_str()))
             .arg(Arg::with_name("count")
                 .short("c")
                 .long("count")
@@ -166,7 +173,7 @@ fn main() {
                 .short("i")
                 .long("index-path")
                 .takes_value(true)
-                .default_value(DEFAULT_INDEX_PATH))
+                .default_value(default_index.as_str()))
             .arg(Arg::with_name("results")
                 .short("r")
                 .long("results")
